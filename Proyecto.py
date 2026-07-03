@@ -48,7 +48,7 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics import f1_score, classification_report
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -143,9 +143,10 @@ OCR_BOOST_CONTRAST  = 2.0     # Factor de mejora de contraste (variante 2 de pre
 _CACHE_VERSION = "v3_ocr_twitter"
 
 # ---- Modo de ejecución ----
-# True  → carga los modelos ya entrenados desde OUTPUT_DIR (~1 min, sin reentrenar)
-# False → reentrena todos los modelos desde cero (varias horas sin GPU)
-LOAD_PRETRAINED = True
+# False → entrena todos los modelos desde cero (minutos con GPU si las
+#         features ya están cacheadas; sin GPU puede llevar horas)
+# True  → carga los modelos ya entrenados desde OUTPUT_DIR (~1 min)
+LOAD_PRETRAINED = False
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
@@ -1151,8 +1152,12 @@ def _run_epoch(model, loader, optimizer, criterion, device, training=True, max_g
                 # Soft labels: usar soft cross-entropy (ignora 'criterion')
                 loss       = _soft_cross_entropy(logits, labels)
                 hard_labels = labels.argmax(dim=1)   # para métricas
-            else:
+            elif criterion is not None:
                 loss        = criterion(logits, labels)
+                hard_labels = labels
+            else:
+                # Evaluación sin criterio (solo interesan las métricas)
+                loss        = torch.zeros((), device=logits.device)
                 hard_labels = labels
 
             if training:
@@ -1402,21 +1407,32 @@ if __name__ == '__main__':
     print(f"  Features alineadas — train: {text_tr.shape} | test: {text_te.shape}")
 
     # ──────────────────────────────────────────────────────────────────────
-    # PASO 3: Split 80 / 20 para T2.1
-    #   80% → entrenar base models
-    #   20% → validación final (no toca ningún modelo)
-    #
-    # Se eliminó el split de meta-learner (antes 70/10/20) porque el
-    # StackingHead con solo ~340 muestras colapsa a predecir la clase
-    # mayoritaria. El soft voting no necesita calibración adicional.
-    # ──────────────────────────────────────────────────────────────────────
-    # ──────────────────────────────────────────────────────────────────────
     # PASO 3: Preparar features y soft labels para T2.1
+    #   Evaluación honesta: ANTES del k-fold se aparta un HOLDOUT
+    #   estratificado del 15% que ningún modelo ve durante el entrenamiento.
+    #   Toda la métrica final de T2.1 se calcula sobre ese holdout.
+    #   El split se persiste en disco para que LOAD_PRETRAINED=True evalúe
+    #   siempre sobre las mismas muestras.
     # ──────────────────────────────────────────────────────────────────────
-    print("\n[PASO 3] Preparando dataset para Tarea 2.1 (YES/NO) — K-fold + soft labels...")
+    print("\n[PASO 3] Preparando dataset para Tarea 2.1 (YES/NO) — holdout + K-fold + soft labels...")
 
-    labels_21     = df_train['label_21'].values
+    labels_21      = df_train['label_21'].values
     soft_labels_21 = np.array(list(df_train['soft_21']), dtype=np.float32)  # [N, 2]
+
+    holdout_path = os.path.join(OUTPUT_DIR, "holdout_split_t21.json")
+    if LOAD_PRETRAINED and os.path.exists(holdout_path):
+        with open(holdout_path, encoding='utf-8') as f:
+            _split = json.load(f)
+        idx_dev, idx_hold = np.array(_split['dev']), np.array(_split['holdout'])
+        print(f"  Split cargado de disco — dev: {len(idx_dev)} | holdout: {len(idx_hold)}")
+    else:
+        idx_dev, idx_hold = train_test_split(
+            np.arange(len(labels_21)), test_size=0.15,
+            stratify=labels_21, random_state=SEED
+        )
+        with open(holdout_path, 'w', encoding='utf-8') as f:
+            json.dump({'dev': idx_dev.tolist(), 'holdout': idx_hold.tolist()}, f)
+        print(f"  Split creado (estratificado, seed={SEED}) — dev: {len(idx_dev)} | holdout: {len(idx_hold)}")
 
     ds_te21 = MemeDataset(text_te, img_te)
     ld_te21 = DataLoader(ds_te21, batch_size=BATCH_SIZE, shuffle=False)
@@ -1463,8 +1479,12 @@ if __name__ == '__main__':
 
         skf = StratifiedKFold(n_splits=N_FOLDS_T21, shuffle=True, random_state=SEED)
         fold_val_loaders = []   # guardamos loaders de val para evaluar CrossModalGRU
+        fold_splits      = []   # (tr_idx, vl_idx) absolutos de cada fold
 
-        for fold_i, (tr_idx, vl_idx) in enumerate(skf.split(text_tr, labels_21)):
+        # K-fold SOLO sobre el conjunto de desarrollo (el holdout queda fuera)
+        for fold_i, (tr_rel, vl_rel) in enumerate(skf.split(text_tr[idx_dev], labels_21[idx_dev])):
+            tr_idx, vl_idx = idx_dev[tr_rel], idx_dev[vl_rel]
+            fold_splits.append((tr_idx, vl_idx))
             print(f"\n  [Fold {fold_i+1}/{N_FOLDS_T21}] train:{len(tr_idx)} | val:{len(vl_idx)}")
 
             # Dataset de entrenamiento con SOFT LABELS
@@ -1508,17 +1528,20 @@ if __name__ == '__main__':
             model_weights_21.append(fold_f1)
             print(f"  Fold {fold_i+1} val F1: {fold_f1:.4f} (peso en ensemble)")
 
-        # CrossModalGRU: entrena sobre todos los datos (sin fold), valida en fold 0
-        labs_all = labels_21
+        # CrossModalGRU: entrena con el TRAIN del fold 0 y valida en el val
+        # del fold 0 (que nunca ve) — así su early-stopping y su peso en el
+        # ensemble son comparables y honestos, igual que los del resto de folds
+        tr0_idx, _ = fold_splits[0]
+        labs_all = labels_21[tr0_idx]
         n_all = len(labs_all)
         cw_all = [
             n_all / (2 * max((labs_all == 0).sum(), 1)),
             n_all / (2 * max((labs_all == 1).sum(), 1)),
         ]
-        ds_tr_all = MemeDataset(text_tr, img_tr, soft_labels=soft_labels_21)
+        ds_tr_all = MemeDataset(text_tr[tr0_idx], img_tr[tr0_idx], soft_labels=soft_labels_21[tr0_idx])
         ld_tr_all = DataLoader(ds_tr_all, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
 
-        print(f"\n  [CrossModalGRU] Entrenando sobre todos los datos de train...")
+        print(f"\n  [CrossModalGRU] Entrenando con el split del fold 0 (train/val honestos)...")
         torch.manual_seed(SEED + N_FOLDS_T21)
         model_cross_21 = CrossModalGRUClassifier(num_classes=2).to(DEVICE)
         model_cross_21 = train_model(
@@ -1543,22 +1566,18 @@ if __name__ == '__main__':
     print(f"\n  Pesos ensemble T2.1 (F1 val por modelo): {[f'{w:.4f}' for w in model_weights_21]}")
 
     # ──────────────────────────────────────────────────────────────────────
-    # PASO 4b: Ensemble T2.1 — Soft Voting PONDERADO por F1
+    # PASO 4b: Ensemble T2.1 — Soft Voting PONDERADO por F1, evaluado en el
+    # HOLDOUT del 15% que ningún modelo ha visto durante el entrenamiento
     # ──────────────────────────────────────────────────────────────────────
-    # Para la evaluación en validación usamos el fold 0 como referencia
-    # (con LOAD_PRETRAINED, reconstruimos un loader de val sobre 20% fijo)
-    n_total = len(labels_21)
-    perm_val = np.random.permutation(n_total)
-    vl_idx_ref = perm_val[int(0.80 * n_total):]
-    ds_vl21_ref = MemeDataset(text_tr[vl_idx_ref], img_tr[vl_idx_ref], labels=labels_21[vl_idx_ref])
+    ds_vl21_ref = MemeDataset(text_tr[idx_hold], img_tr[idx_hold], labels=labels_21[idx_hold])
     ld_vl21 = DataLoader(ds_vl21_ref, batch_size=BATCH_SIZE, shuffle=False)
 
-    print("\n[PASO 4b] Ensemble T2.1 — Soft Voting ponderado por F1...")
+    print("\n[PASO 4b] Ensemble T2.1 — Soft Voting ponderado por F1 (evaluación en holdout)...")
     probs_vl21  = soft_vote(models_21, ld_vl21, DEVICE, weights=model_weights_21)
     vl_preds_21 = probs_vl21.argmax(axis=1)
-    vl_labs_21  = labels_21[vl_idx_ref]
-    print(f"  Split validación referencia: {len(vl_labs_21)} muestras")
-    print("\n  [Evaluación Validación — T2.1 Soft Voting ponderado]")
+    vl_labs_21  = labels_21[idx_hold]
+    print(f"  Holdout: {len(vl_labs_21)} muestras nunca vistas en entrenamiento")
+    print("\n  [Evaluación HOLDOUT — T2.1 Soft Voting ponderado]")
     print(classification_report(vl_labs_21, vl_preds_21,
                                  target_names=['NO', 'YES'], zero_division=0))
 
@@ -1572,13 +1591,25 @@ if __name__ == '__main__':
     i_feats22 = img_tr[mask22]
     labs22    = df_train['label_22'].values[mask22]
 
-    n22    = len(labs22)
-    perm22 = np.random.permutation(n22)
-    sp_tr22 = int(0.80 * n22)
-    tr22    = perm22[:sp_tr22]
-    vl22    = perm22[sp_tr22:]
+    # Split honesto 70/15/15: train / val (early-stopping + calibración del
+    # umbral) / holdout (métrica final, nunca visto). Persistido en disco.
+    n22 = len(labs22)
+    holdout22_path = os.path.join(OUTPUT_DIR, "holdout_split_t22.json")
+    if LOAD_PRETRAINED and os.path.exists(holdout22_path):
+        with open(holdout22_path, encoding='utf-8') as f:
+            _s22 = json.load(f)
+        tr22 = np.array(_s22['train']); vl22 = np.array(_s22['val']); ho22 = np.array(_s22['holdout'])
+        print("  Split T2.2 cargado de disco")
+    else:
+        tr22, _rest22 = train_test_split(
+            np.arange(n22), test_size=0.30, stratify=labs22, random_state=SEED)
+        vl22, ho22 = train_test_split(
+            _rest22, test_size=0.50, stratify=labs22[_rest22], random_state=SEED)
+        with open(holdout22_path, 'w', encoding='utf-8') as f:
+            json.dump({'train': tr22.tolist(), 'val': vl22.tolist(),
+                       'holdout': ho22.tolist()}, f)
 
-    print(f"  Split T2.2 — train: {len(tr22)} | val: {len(vl22)}")
+    print(f"  Split T2.2 — train: {len(tr22)} | val: {len(vl22)} | holdout: {len(ho22)}")
 
     # Oversampling JUDGEMENTAL en el split de entrenamiento
     labs22_tr   = labs22[tr22]
@@ -1656,10 +1687,16 @@ if __name__ == '__main__':
             best_f1_22    = f1_t
             best_thresh_22 = t
 
-    print(f"  Umbral óptimo JUDGEMENTAL: {best_thresh_22:.2f} (F1 macro validación: {best_f1_22:.4f})")
-    vl_preds_22 = np.where(probs_vl22[:, 0] >= best_thresh_22, 0, 1)
-    print("\n  [Evaluación Validación — T2.2 Soft Voting + umbral calibrado]")
-    print(classification_report(vl_labs_22, vl_preds_22,
+    print(f"  Umbral óptimo JUDGEMENTAL: {best_thresh_22:.2f} (F1 macro en val de calibración: {best_f1_22:.4f})")
+
+    # Métrica final en el HOLDOUT de T2.2 (el umbral llega ya fijado en val)
+    ds_ho22 = MemeDataset(t_feats22[ho22], i_feats22[ho22], labs22[ho22])
+    ld_ho22 = DataLoader(ds_ho22, batch_size=BATCH_SIZE, shuffle=False)
+    probs_ho22  = soft_vote(models_22, ld_ho22, DEVICE)
+    ho_labs_22  = labs22[ho22]
+    ho_preds_22 = np.where(probs_ho22[:, 0] >= best_thresh_22, 0, 1)
+    print("\n  [Evaluación HOLDOUT — T2.2 Soft Voting + umbral calibrado en val]")
+    print(classification_report(ho_labs_22, ho_preds_22,
                                  target_names=['JUDGEMENTAL', 'DIRECT'], zero_division=0))
 
     # ──────────────────────────────────────────────────────────────────────
@@ -1716,13 +1753,13 @@ if __name__ == '__main__':
         print("  [PASO 7] Modelos cargados desde disco, no se sobreescriben.")
 
     f1_21 = f1_score(vl_labs_21, vl_preds_21, average='macro', zero_division=0)
-    f1_22 = f1_score(vl_labs_22, vl_preds_22, average='macro', zero_division=0)
+    f1_22 = f1_score(ho_labs_22, ho_preds_22, average='macro', zero_division=0)
 
     print("\n" + "=" * 62)
     print("  EJECUCIÓN COMPLETADA")
     print("=" * 62)
-    print(f"  T2.1 F1 macro (validación, soft voting):          {f1_21:.4f}")
-    print(f"  T2.2 F1 macro (validación, umbral={best_thresh_22:.2f}): {f1_22:.4f}")
+    print(f"  T2.1 F1 macro (holdout 15%, soft voting):        {f1_21:.4f}")
+    print(f"  T2.2 F1 macro (holdout 15%, umbral={best_thresh_22:.2f}):    {f1_22:.4f}")
     print(f"  Predicciones en:  {OUTPUT_DIR}")
     print(f"  Modelos en:       {OUTPUT_DIR}")
     print("=" * 62)

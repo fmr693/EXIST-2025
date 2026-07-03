@@ -65,8 +65,16 @@ Notas de ejecución:
 
 ## 📊 Evaluación
 
-- **Métricas internas:** F1 macro en validación por fold (se imprime el `classification_report` completo de ambas subtareas).
-- **Contraste externo:** las predicciones sobre el test oficial se compararon con los resultados publicados de la campaña (métricas ICM-Hard/ICM-Soft y F1). Resultado por encima de la media de los equipos participantes; **+4,8 puntos de F1 sobre el baseline oficial**.
+**Protocolo sin fuga de datos:** antes de cualquier entrenamiento se aparta un **holdout estratificado del 15%** que ningún modelo ve jamás — el k-fold, el early-stopping y los pesos del ensemble se calculan únicamente con el 85% restante, y toda métrica final sale del holdout. En la subtarea 2.2 el split es 70/15/15: el umbral de decisión se calibra en *val* y se reporta sobre el *holdout*. Los splits se persisten en disco para reproducibilidad.
+
+| Subtarea | F1 macro (holdout) | Por clase |
+|----------|--------------------|-----------|
+| **2.1** ¿Es sexista? | **0.61** | YES 0.74 · NO 0.49 (607 memes) |
+| **2.2** Intención | **0.54** | DIRECT 0.76 · JUDGEMENTAL 0.32 (273 memes) |
+
+La clase `JUDGEMENTAL` (memes que condenan el sexismo) es con diferencia la más difícil: minoritaria y ambigua incluso para los anotadores humanos — la misma conclusión que reportan los equipos de la campaña oficial.
+
+**Contraste externo:** las predicciones sobre el test oficial (en formato PyEvALL) se contrastaron con los resultados publicados de la campaña, quedando por encima de la media de los equipos participantes y **+4,8 puntos de F1 sobre el baseline oficial**.
 
 ## 📂 Estructura
 
