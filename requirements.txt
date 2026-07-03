@@ -1,0 +1,10 @@
+torch>=2.0
+torchvision>=0.15
+transformers>=4.40
+sentencepiece
+protobuf
+scikit-learn
+pandas
+numpy
+Pillow
+easyocr

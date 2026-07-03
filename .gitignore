@@ -1,0 +1,16 @@
+# Caché de features y OCR (se regenera al ejecutar)
+cache/
+
+# Modelos entrenados y predicciones
+predictions/
+*.pt
+
+# Dataset oficial EXIST 2025 (se solicita a los organizadores, no se redistribuye)
+EXIST 2025 Memes Dataset*/
+Resultados Training*/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

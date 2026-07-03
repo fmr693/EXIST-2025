@@ -24,40 +24,9 @@
 # =============================================================================
 
 # =============================================================================
-# SECCIÓN 0: AUTO-INSTALACIÓN DE DEPENDENCIAS
-# =============================================================================
-import subprocess
-import sys
-
-
-def _install(package):
-    subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", package, "-q"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
-
-
-_required = {
-    'transformers':  'transformers',
-    'sklearn':       'scikit-learn',
-    'langdetect':    'langdetect',
-    'sentencepiece': 'sentencepiece',
-    'easyocr':       'easyocr',
-    'google.protobuf': 'protobuf',
-    'tiktoken':      'tiktoken',
-}
-
-for _mod, _pkg in _required.items():
-    try:
-        __import__(_mod)
-    except ImportError:
-        print(f"Instalando {_pkg}... (primera vez puede tardar)")
-        _install(_pkg)
-        print(f"  OK: {_pkg}")
-
-# =============================================================================
 # SECCIÓN 1: IMPORTACIONES
 # =============================================================================
+# Dependencias: pip install -r requirements.txt
 import os
 import sys
 # Fix para codificación UTF-8 en consola Windows (evita UnicodeEncodeError con
@@ -1729,9 +1698,8 @@ if __name__ == '__main__':
     )
     preds_22 = preds_22_combined[sexist_mask]  # solo para métricas de sexistas
     print(f"\n  Memes sexistas predichos: {sexist_mask.sum()}/{len(test_ids)}")
-    n_direct = sum(1 for i, p in enumerate(preds_21) if p == 1
-                   and probs_22_all[i][1] * probs_21[i][1] >
-                       probs_22_all[i][0] * probs_21[i][1])
+    # Contar sobre las etiquetas hard finales (ya calibradas): DIRECT = índice 2
+    n_direct = int((preds_22 == 2).sum())
     print(f"  DIRECT: {n_direct} | JUDGEMENTAL: {int(sexist_mask.sum()) - n_direct}")
 
     # ──────────────────────────────────────────────────────────────────────
