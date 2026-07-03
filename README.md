@@ -10,7 +10,7 @@ Sistema **multimodal (texto + imagen)** que detecta sexismo en memes de redes so
 - **Subtarea 2.1** — ¿Es sexista el meme? → `YES / NO`
 - **Subtarea 2.2** — ¿Con qué intención? → `DIRECT` (sexista en sí mismo) / `JUDGEMENTAL` (condena el sexismo)
 
-> **Contexto honesto:** este trabajo se realizó como proyecto académico **después del cierre de la campaña oficial**, partiendo del ejercicio base publicado y siguiendo las *guidelines* oficiales (incluidas en el repo). Las predicciones se generan en el formato oficial de evaluación (PyEvALL) y los resultados se contrastaron con los publicados por los equipos participantes, quedando **por encima de la media de la tarea** y superando el baseline en **+4,8 puntos de F1**.
+> **Contexto honesto:** este trabajo se realizó como proyecto académico **después del cierre de la campaña oficial**, partiendo del ejercicio base publicado y siguiendo las *guidelines* oficiales (incluidas en el repo). Las predicciones se generan en el formato oficial de evaluación (PyEvALL) y las métricas se contrastan con el leaderboard publicado en el *overview* oficial — comparación **indicativa** (holdout interno vs. test oficial), detallada en la sección de Evaluación.
 
 ## 🧠 Arquitectura
 
@@ -74,7 +74,12 @@ Notas de ejecución:
 
 La clase `JUDGEMENTAL` (memes que condenan el sexismo) es con diferencia la más difícil: minoritaria y ambigua incluso para los anotadores humanos — la misma conclusión que reportan los equipos de la campaña oficial.
 
-**Contraste externo:** las predicciones sobre el test oficial (en formato PyEvALL) se contrastaron con los resultados publicados de la campaña, quedando por encima de la media de los equipos participantes y **+4,8 puntos de F1 sobre el baseline oficial**.
+### Contraste con el leaderboard oficial (indicativo)
+
+Los gold labels del test oficial no son públicos, así que nuestras métricas salen del holdout interno y la comparación con el [*Extended Overview* oficial de EXIST 2025](https://www.damianospina.com/publication/plaza-2025-extended/plaza-2025-extended.pdf) (Tablas 13 y 15) es **orientativa, no un ranking**:
+
+- **Subtarea 2.1** — la tabla oficial (hard) reporta **F1 de la clase YES**: nuestro **0,74** supera el baseline mayoritario oficial (0,68) en **+5,8 puntos** y cae en el rango medio-alto de los 18 sistemas presentados (que van de 0,48 a 0,78; solo 16 de 18 superaron el baseline).
+- **Subtarea 2.2** — la tabla oficial (hard) reporta **F1 macro**: nuestro **0,54** se compara con un leaderboard que va de 0,10 a 0,56 (baseline mayoritario: 0,18) — es decir, el rango de los sistemas de cabeza de una tarea donde la mayoría de equipos quedó por debajo de 0,40.
 
 ## 📂 Estructura
 
