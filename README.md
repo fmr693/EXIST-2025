@@ -81,6 +81,20 @@ Los gold labels del test oficial no son públicos, así que nuestras métricas s
 - **Subtarea 2.1** — la tabla oficial (hard) reporta **F1 de la clase YES**: nuestro **0,74** supera el baseline mayoritario oficial (0,68) en **+5,8 puntos** y cae en el rango medio-alto de los 18 sistemas presentados (que van de 0,48 a 0,78; solo 16 de 18 superaron el baseline).
 - **Subtarea 2.2** — la tabla oficial (hard) reporta **F1 macro**: nuestro **0,54** se compara con un leaderboard que va de 0,10 a 0,56 (baseline mayoritario: 0,18) — es decir, el rango de los sistemas de cabeza de una tarea donde la mayoría de equipos quedó por debajo de 0,40.
 
+## 🔄 El círculo cerrado: fine-tuning VLM con el Motor de LoRAs
+
+Este pipeline dio origen al **Motor de LoRAs** (fábrica local de fine-tuning y despliegue de LLMs; repo próximamente público) — y en julio de 2026 el Motor volvió al problema original como su primer caso de estudio medible. Su `VLMTrainer` afinó **Qwen2-VL-2B-Instruct** (LoRA r=16, bf16, 3 épocas, **52 min en una RTX 4080 con 6 GB de VRAM**) sobre el mismo *fold-0 train*, calibró el umbral en el mismo *val*, y se midió **una única vez** sobre el mismo holdout:
+
+| Sistema (mismo holdout, 607 memes) | F1 macro | F1 YES |
+|---|---|---|
+| Pipeline clásico de este repo (ensemble de 6 modelos) | 0.61 | 0.74 |
+| Qwen2-VL-2B zero-shot (umbral calibrado en val) | 0.62 | 0.73 |
+| **Qwen2-VL-2B + LoRA entrenado por el Motor** | **0.70** | **0.79** |
+
+Tres lecturas: **(1)** un VLM moderno de 2B en zero-shot, con solo calibrar el umbral, ya iguala al ensemble clásico completo; **(2)** el fine-tuning LoRA es lo que marca la diferencia real: **+8,7 puntos de F1 macro**; **(3)** la clase difícil (`NO`) sube de F1 0,49 a 0,61. Nota de lectura: en este holdout (66% YES) el clasificador trivial "todo YES" logra F1-YES 0,79 pero solo 0,40 de macro — por eso la métrica que manda es la **macro**.
+
+Los scripts del experimento están en [`vlm_lora/`](vlm_lora/) (generación del dataset ChatML multimodal respetando los splits, entrenamiento vía el VLMTrainer del Motor, y evaluación por log-probabilidades).
+
 ## 📂 Estructura
 
 ```
